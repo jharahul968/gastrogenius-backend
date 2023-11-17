@@ -19,7 +19,7 @@ WORKDIR /yolov5-fastapi
 
 # Copy and install Python dependencies
 COPY requirements.txt /yolov5-fastapi
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the application code
 COPY . /yolov5-fastapi
