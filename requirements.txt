@@ -50,3 +50,4 @@ setuptools>=65.5.1 # Snyk vulnerability fix
 fastapi
 segmentation
 starlette
+python-multipart>=0.0.6
