@@ -90,6 +90,14 @@ async def extract_frames(file: UploadFile = File(...)):
 
 async def detect_polyps_return_img(websocket: WebSocket, frame):
     input_image=frame
+
+    # width, height = input_image.size
+    # resize_factor = min(1024 / width, 1024 / height)
+    # input_image = input_image.resize((
+    #     int(input_image.width * resize_factor),
+    #     int(input_image.height * resize_factor)
+    # ))
+    
     results = model(input_image)
     results.render()  # updates results.imgs with boxes and labels
     for img in results.ims:
