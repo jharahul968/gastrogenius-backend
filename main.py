@@ -10,6 +10,7 @@ import os
 import shutil
 import base64
 import time
+import asyncio
 
 model = get_yolov5()
 
@@ -89,24 +90,28 @@ async def extract_frames(file: UploadFile = File(...)):
 
 
 async def detect_polyps_return_img(websocket: WebSocket, frame):
-    input_image=frame
     
+    input_image=frame
+
+    #print("This is before the processing happens: ",time.time())
     results = model(input_image)
     results.render()  # updates results.imgs with boxes and labels
-    for img in results.ims:
-        bytes_io = io.BytesIO()
+    #print("This is after the processing happens: ",time.time())
+    
+    
+    images_to_send = results.ims
+
+    # Process images in parallel
+    async def process_image(img):
         img_base64 = Image.fromarray(img)
-        
-        img_base64.save(bytes_io, format="jpeg")
-        
         image_bytes = io.BytesIO()
         img_base64.save(image_bytes, format="PNG")
 
         base64_string = base64.b64encode(image_bytes.getvalue()).decode("utf-8")
-        
-    
-    
-    await websocket.send_text(base64_string)
+        await websocket.send_text(base64_string)
+
+    await asyncio.gather(*[process_image(img) for img in images_to_send])
+
 
 
 
@@ -114,20 +119,21 @@ async def extract_frames_from_video(websocket, video_path):
 
     cap = cv2.VideoCapture(video_path)
 
+    frame_number = 0
     while True:
-
         ret, frame = cap.read()
 
         if not ret:
             break
 
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame_number += 1
+        if frame_number % 2 == 0:  # Skip every alternate frame (adjust as needed)
+            continue
 
-    # Create a PIL Image from the NumPy array
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         pil_image = Image.fromarray(rgb_frame)
-        
+
         await detect_polyps_return_img(websocket, pil_image)
-        
 
     cap.release()
     
