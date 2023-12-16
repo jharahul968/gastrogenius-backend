@@ -13,6 +13,8 @@ def get_yolov5():
 
 def get_yolov8():
     model = YOLO('./model/best_v8.pt')
+    model.conf=0.25
+    return model
 
 
 def get_image_from_bytes(binary_image, max_size=1024):
