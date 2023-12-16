@@ -47,15 +47,25 @@ def extract_frames_from_video(frame):
     # results.render()  # updates results.imgs with boxes and labels
     
     # for yolov8
-    results = model.predict(input_image) 
-    results.render()
-        
+    results = model(input_image, conf=0.25) 
+
     # Process images in parallel
-    for img in results.ims:
-        img_base64 = Image.fromarray(img)
+#    for img in results.ims:
+#        img_base64 = Image.fromarray(img)
+#        image_bytes = io.BytesIO()
+#        img_base64.save(image_bytes, format="jpeg")
+#        base64_string = base64.b64encode(image_bytes.getvalue()).decode("utf-8")
+#        emit("Processed_Frame", base64_string)
+
+
+    for r in results:
+        im_array = r.plot()  # plot a BGR numpy array of predictions
+        im = Image.fromarray(im_array[..., ::-1])  # RGB PIL image
+      #  im.show()  # show image
+      #  im.save('results.jpg')  # save image
+        img_base64 = Image.fromarray(im)
         image_bytes = io.BytesIO()
         img_base64.save(image_bytes, format="jpeg")
-
         base64_string = base64.b64encode(image_bytes.getvalue()).decode("utf-8")
         emit("Processed_Frame", base64_string)
 

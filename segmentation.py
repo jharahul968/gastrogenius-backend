@@ -13,7 +13,6 @@ def get_yolov5():
 
 def get_yolov8():
     model = YOLO('./model/best_v8.pt')
-    model.conf=0.25
     return model
 
 
