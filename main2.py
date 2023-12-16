@@ -42,8 +42,14 @@ def extract_frames_from_video(frame):
     pil_image = Image.fromarray(rgb_frame)
     input_image = pil_image
 
-    results = model(input_image)
-    results.render()  # updates results.imgs with boxes and labels
+    # for yolov5
+    # results = model(input_image)
+    # results.render()  # updates results.imgs with boxes and labels
+    
+    # for yolov8
+    results = model.predict(input_image) 
+    results.render()
+        
     # Process images in parallel
     for img in results.ims:
         img_base64 = Image.fromarray(img)
