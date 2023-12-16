@@ -1,4 +1,4 @@
-""" This is the flask application which runs the ai model for Polyps Detection"""
+﻿""" This is the flask application which runs the ai model for Polyps Detection"""
 import io
 import base64
 from PIL import Image
@@ -7,9 +7,9 @@ from flask import Flask, jsonify
 import cv2
 from flask_cors import CORS, cross_origin
 from flask_socketio import SocketIO, emit
-from segmentation import get_yolov5
+from segmentation import get_yolov5, get_yolov8
 
-model = get_yolov5()
+model = get_yolov8()
 
 app = Flask(__name__)
 cors = CORS(app)
