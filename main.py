@@ -1,18 +1,16 @@
-""" This is the flask application which runs the ai model for Polyps Detection"""
+""" This is the flask application which 
+    runs the ai model for Polyps Detection"""
 import io
 import os
 import base64
+from threading import Thread
 from PIL import Image
-import numpy as np
-from flask import Flask, jsonify,request
+from flask import Flask,jsonify,request
 import cv2
 from flask_cors import CORS, cross_origin
 from werkzeug.utils import secure_filename
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO
 from segmentation import get_yolov5
-import time
-from threading import Thread, Event
-from redis import Redis
 
 model = get_yolov5()
 
@@ -26,9 +24,9 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['SECRET_KEY'] = 'secret!'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-stop_extraction_flag = False
+STOP_EXTRACTION_FLAG = False
+ #pylint: disable=global-statement
 
-#Subscribe to the 'channel_to_ai' Redis channel
 @socketio.on('connect_with_frontend')
 def handle_connect():
     """
@@ -41,8 +39,13 @@ def handle_connect():
 @socketio.on("stop_thread")
 @cross_origin()
 def stop_thread():
-    global stop_extraction_flag
-    stop_extraction_flag = True
+    """
+    This will stop the current running thread by setting the flag to True
+    """
+    #pylint: disable=no-member
+    global STOP_EXTRACTION_FLAG
+    #pylint: enable=no-member
+    STOP_EXTRACTION_FLAG = True
 
     return jsonify({'message':'Thread Stopped.'})
 
@@ -84,53 +87,53 @@ def extract_frames():
 @app.route('/start-session', methods=["POST"])
 @cross_origin()
 def start_session():
+    """
+    This function will start a thread for extracting and processing the frame
+    and return an acknowlegement from main thread.
+    """
+    global STOP_EXTRACTION_FLAG
+    STOP_EXTRACTION_FLAG = False
 
-    global stop_extraction_flag
-    stop_extraction_flag = False
+    video_path = request.data.decode('utf-8')
 
-    videoPath = request.data.decode('utf-8')
-
-    if videoPath:
-        Thread(target=extract_frames_from_video, args=(videoPath,)).start()
+    if video_path:
+        Thread(target=extract_frames_from_video, args=(video_path,)).start()
         return jsonify({"ACK": True})
-    
-    else:
-         return jsonify({"ACK": False, "error": "No video file received."})
+    return jsonify({"ACK": False, "error": "No video file received."})
 
 
-def extract_frames_from_video(videoPath):
+def extract_frames_from_video(video_path):
     """
     The below three lines are used to decode the base64 
     encoded frame back to numpy array format which is neccesary
     for AI server to process
-    """ 
-    global stop_extraction_flag
-    cap = cv2.VideoCapture(videoPath)
+    """
+    #pylint: disable=no-member
+    cap = cv2.VideoCapture(video_path)
     # pylint: enable=no-member
     while True:
-       
-        if stop_extraction_flag:
+        if STOP_EXTRACTION_FLAG:
             break
 
         ret, frame = cap.read()
 
         if not ret:
             break
-      
-        # # pylint: enable=no-member
+        # # pylint: disable=no-member
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         # pylint: enable=no-member
         pil_image = Image.fromarray(rgb_frame)
 
         results = model(pil_image)
-        results.render()  # updates results.imgs with boxes and labels
+        results.render()# updates results.imgs with boxes and labels
         # Process images in parallel
 
         for img in results.ims:
             img_base64 = Image.fromarray(img)
             image_bytes = io.BytesIO()
             img_base64.save(image_bytes, format="jpeg")
-            base64_string = base64.b64encode(image_bytes.getvalue()).decode("utf-8")
+            base64_string = base64.b64encode(
+                image_bytes.getvalue()).decode("utf-8")
 
         socketio.emit("Processed_Frame", base64_string)
 
@@ -141,4 +144,6 @@ if __name__ == '__main__':
     if not os.path.exists(app.config['UPLOAD_FOLDER']):
         os.makedirs(app.config['UPLOAD_FOLDER'])
 
-    socketio.run(app, host='127.0.0.1', port = 8000, allow_unsafe_werkzeug=True, debug=True)
+    socketio.run(app,
+                 host='127.0.0.1', port = 8000,
+                 allow_unsafe_werkzeug=True, debug=True)
