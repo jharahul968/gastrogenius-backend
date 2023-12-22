@@ -1,4 +1,15 @@
-# to run the program
-    uvicorn main:app --reload --host 0.0.0.0 --port 8000
-# the url for testing
-http://0.0.0.0:8000/docs#/
+# The Deep Learning Model for Real Time Polyps Detection
+
+# To run the program
+
+1. Install neccessary packages and modules by running the below command:
+
+```bash
+pip install -r requirements.txt
+```
+
+2. Run the application using the below command:
+
+```bash
+python3 main2.py
+```

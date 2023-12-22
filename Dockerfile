@@ -14,19 +14,19 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Set the working directory
-RUN mkdir /yolov5-fastapi
-WORKDIR /yolov5-fastapi
+RUN mkdir /yolov5-model
+WORKDIR /yolov5-model
 
 # Copy and install Python dependencies
-COPY requirements.txt /yolov5-fastapi
+COPY requirements.txt /yolov5-model
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the application code
-COPY . /yolov5-fastapi
+COPY . /yolov5-model
 
 # Expose the application port
 EXPOSE 8000
 
 # Run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python3","main2.py"]
 
