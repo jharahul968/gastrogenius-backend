@@ -7,7 +7,7 @@ from ultralytics import YOLO
 
 def get_yolov5():
     model = torch.hub.load('./yolov5', 'custom',
-                           path='./model/best_v5.pt', source='local')
+                           path='./model/best.pt', source='local')
     model.conf = 0.1
     return model
 
