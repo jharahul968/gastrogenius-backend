@@ -10,7 +10,7 @@ def get_yolov5():
     return model
 
 
-def get_image_from_bytes(binary_image, max_size=1024):
+def get_image_from_bytes(binary_image, max_size=640):
     
     transform = transforms.Compose([
             transforms.ToTensor(),

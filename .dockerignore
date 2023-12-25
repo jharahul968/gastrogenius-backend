@@ -2,9 +2,9 @@
 **/*.pyo
 **/*.mo
 .gitignore
+uploads
 .git/
 **/__pycache__/
 Dockerfile
 **/*.md
 /venv
-main.py

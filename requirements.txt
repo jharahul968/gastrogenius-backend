@@ -48,11 +48,9 @@ setuptools>=65.5.1 # Snyk vulnerability fix
 # albumentations>=1.0.3
 # pycocotools>=2.0.6  # COCO mAP
 Cython>=3.0.6
-fastapi
 Flask
 Flask-Cors
 FLask-SocketIO
-uvicorn
 segmentation
 starlette
 python-multipart>=0.0.6
