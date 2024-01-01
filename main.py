@@ -22,10 +22,20 @@ ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mkv'}
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['SECRET_KEY'] = 'secret!'
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="http://localhost:3000")
 
+PROCESS_THREAD = None
+PAUSE_EXTRACTING_FLAG = False
 STOP_EXTRACTION_FLAG = False
  #pylint: disable=global-statement
+
+def allowed_file(filename):
+    """
+    This function defines the type of files allowed in the extraction
+    """
+    return '.' in filename and \
+        filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
 
 @socketio.on('connect_with_frontend')
 def handle_connect():
@@ -34,6 +44,35 @@ def handle_connect():
     established between frontend and this server.
     """
     print('Frontend connected to AI Server.')
+
+
+@socketio.on("Pause")
+@cross_origin()
+def pause_session():
+    """
+    This function pauses the real time session
+    """
+    print("pause called.")
+    global PAUSE_EXTRACTING_FLAG
+    
+    PAUSE_EXTRACTING_FLAG = True
+
+    return jsonify({"message":"Paused"})
+
+
+@socketio.on("Unpause")
+@cross_origin()
+def unpause_session():
+    """
+    This function unpauses the real time session
+    """
+    print("Unpause called.")
+
+    global PAUSE_EXTRACTING_FLAG
+
+    PAUSE_EXTRACTING_FLAG = False
+
+    return jsonify({"message":"Unpaused"})
 
 
 @socketio.on("stop_thread")
@@ -48,14 +87,6 @@ def stop_thread():
     STOP_EXTRACTION_FLAG = True
 
     return jsonify({'message':'Thread Stopped.'})
-
-
-def allowed_file(filename):
-    """
-    This function defines the type of files allowed in the extraction
-    """
-    return '.' in filename and \
-        filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 @app.route('/send-videos', methods=["POST"])
@@ -91,14 +122,16 @@ def start_session():
     This function will start a thread for extracting and processing the frame
     and return an acknowlegement from main thread.
     """
-    global STOP_EXTRACTION_FLAG
+    global STOP_EXTRACTION_FLAG, PROCESS_THREAD
     STOP_EXTRACTION_FLAG = False
-
+    
     video_path = request.data.decode('utf-8')
 
     if video_path:
-        Thread(target=extract_frames_from_video, args=(video_path,)).start()
+        PROCESS_THREAD = Thread(target=extract_frames_from_video,args=(video_path,))
+        PROCESS_THREAD.start()
         return jsonify({"ACK": True})
+    
     return jsonify({"ACK": False, "error": "No video file received."})
 
 
@@ -114,6 +147,9 @@ def extract_frames_from_video(video_path):
     while True:
         if STOP_EXTRACTION_FLAG:
             break
+        
+        if PAUSE_EXTRACTING_FLAG:
+            continue
 
         ret, frame = cap.read()
 
@@ -122,9 +158,9 @@ def extract_frames_from_video(video_path):
         # # pylint: disable=no-member
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         # pylint: enable=no-member
-        pil_image = Image.fromarray(rgb_frame)
+        #pil_image = Image.fromarray(rgb_frame)
 
-        results = model(pil_image)
+        results = model(rgb_frame)
         results.render()# updates results.imgs with boxes and labels
         # Process images in parallel
 
@@ -136,7 +172,7 @@ def extract_frames_from_video(video_path):
                 image_bytes.getvalue()).decode("utf-8")
 
         socketio.emit("Processed_Frame", base64_string)
-
+   
     cap.release()
 
 
