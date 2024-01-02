@@ -27,6 +27,9 @@ socketio = SocketIO(app, cors_allowed_origins="http://localhost:3000")
 PROCESS_THREAD = None
 PAUSE_EXTRACTING_FLAG = False
 STOP_EXTRACTION_FLAG = False
+REVERSE_FRAME = False
+FORWARD_FRAME = False
+CURRENT_FRAME_INDEX = 0
  #pylint: disable=global-statement
 
 def allowed_file(filename):
@@ -37,13 +40,28 @@ def allowed_file(filename):
         filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-@socketio.on('connect_with_frontend')
-def handle_connect():
-    """
-    This code runs when a bidirectional connection is 
-    established between frontend and this server.
-    """
-    print('Frontend connected to AI Server.')
+@socketio.on("Reverse")
+@cross_origin()
+def reverse_frame():
+    global REVERSE_FRAME, FORWARD_FRAME, PAUSE_EXTRACTING_FLAG
+    
+    REVERSE_FRAME = True
+    FORWARD_FRAME = False
+    PAUSE_EXTRACTING_FLAG = True
+    
+    return jsonify({"message":"Reversed"})
+
+
+@socketio.on("Forward")
+@cross_origin()
+def reverse_frame():
+    global FORWARD_FRAME, REVERSE_FRAME, PAUSE_EXTRACTING_FLAG
+    
+    REVERSE_FRAME = False
+    FORWARD_FRAME = True
+    PAUSE_EXTRACTING_FLAG = True
+
+    return jsonify({"message":"Forwarded"})
 
 
 @socketio.on("Pause")
@@ -52,9 +70,7 @@ def pause_session():
     """
     This function pauses the real time session
     """
-    print("pause called.")
     global PAUSE_EXTRACTING_FLAG
-    
     PAUSE_EXTRACTING_FLAG = True
 
     return jsonify({"message":"Paused"})
@@ -66,11 +82,11 @@ def unpause_session():
     """
     This function unpauses the real time session
     """
-    print("Unpause called.")
-
-    global PAUSE_EXTRACTING_FLAG
+    global PAUSE_EXTRACTING_FLAG, REVERSE_FRAME, FORWARD_FRAME
 
     PAUSE_EXTRACTING_FLAG = False
+    REVERSE_FRAME = False
+    FORWARD_FRAME = False
 
     return jsonify({"message":"Unpaused"})
 
@@ -82,8 +98,12 @@ def stop_thread():
     This will stop the current running thread by setting the flag to True
     """
     #pylint: disable=no-member
-    global STOP_EXTRACTION_FLAG
+    global STOP_EXTRACTION_FLAG, PAUSE_EXTRACTING_FLAG, REVERSE_FRAME, FORWARD_FRAME
     #pylint: enable=no-member
+
+    PAUSE_EXTRACTING_FLAG = False
+    REVERSE_FRAME = False
+    FORWARD_FRAME = False
     STOP_EXTRACTION_FLAG = True
 
     return jsonify({'message':'Thread Stopped.'})
@@ -143,35 +163,81 @@ def extract_frames_from_video(video_path):
     """
     #pylint: disable=no-member
     cap = cv2.VideoCapture(video_path)
-    # pylint: enable=no-member
-    while True:
-        if STOP_EXTRACTION_FLAG:
-            break
-        
-        if PAUSE_EXTRACTING_FLAG:
-            continue
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        ret, frame = cap.read()
+    global CURRENT_FRAME_INDEX
 
-        if not ret:
-            break
-        # # pylint: disable=no-member
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        # pylint: enable=no-member
-        #pil_image = Image.fromarray(rgb_frame)
+    CURRENT_FRAME_INDEX = 0
 
-        results = model(rgb_frame)
-        results.render()# updates results.imgs with boxes and labels
-        # Process images in parallel
-
-        for img in results.ims:
+    def convert_to_base64(img):
+            """
+            This sub function converts rgb image data
+            into base64_string
+            """
             img_base64 = Image.fromarray(img)
             image_bytes = io.BytesIO()
             img_base64.save(image_bytes, format="jpeg")
             base64_string = base64.b64encode(
                 image_bytes.getvalue()).decode("utf-8")
+            
+            return base64_string
+    
+    def render(cap):
+        """
+        This sub function handles the rendering and 
+        emiting of the frames to frontend service
+        """
+        ret, frame = cap.read()
+        global REVERSE_FRAME, FORWARD_FRAME
+
+        if not ret:
+                return
+        
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # pylint: enable=no-member
+        results = model(rgb_frame)
+        results.render()# updates results.imgs with boxes and labels
+        # Process images in parallel
+
+        for img in results.ims:
+            base64_string = convert_to_base64(img)
 
         socketio.emit("Processed_Frame", base64_string)
+
+        if REVERSE_FRAME:
+            REVERSE_FRAME = False
+        if FORWARD_FRAME:
+            FORWARD_FRAME = False
+        
+   
+    # pylint: enable=no-member
+    while True:
+
+        if STOP_EXTRACTION_FLAG:
+            break
+        
+        if PAUSE_EXTRACTING_FLAG:
+            
+            if REVERSE_FRAME:
+                CURRENT_FRAME_INDEX = max(0, CURRENT_FRAME_INDEX - 1)
+                cap.set(cv2.CAP_PROP_POS_FRAMES, CURRENT_FRAME_INDEX)
+
+                render(cap)
+                continue
+
+            elif FORWARD_FRAME:
+                CURRENT_FRAME_INDEX = min(total_frames - 1, CURRENT_FRAME_INDEX + 1)
+                cap.set(cv2.CAP_PROP_POS_FRAMES, CURRENT_FRAME_INDEX)
+
+                render(cap)
+                continue
+
+            else:
+                continue
+        
+        cap.set(cv2.CAP_PROP_POS_FRAMES, CURRENT_FRAME_INDEX)
+        CURRENT_FRAME_INDEX += 1
+        render(cap)
    
     cap.release()
 
