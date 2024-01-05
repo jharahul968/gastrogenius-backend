@@ -3,9 +3,11 @@
 import io
 import os
 import base64
+import numpy as np
+import torch
 from threading import Thread
 from PIL import Image
-from flask import Flask,jsonify,request
+from flask import Flask,jsonify,request,abort
 import cv2
 from flask_cors import CORS, cross_origin
 from werkzeug.utils import secure_filename
@@ -18,9 +20,11 @@ app = Flask(__name__)
 cors = CORS(app)
 
 UPLOAD_FOLDER = 'uploads'
+FEEDBACK_FOLDER = 'feedback'
 ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mkv'}
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['FEEDBACK_FOLDER'] = FEEDBACK_FOLDER
 app.config['SECRET_KEY'] = 'secret!'
 socketio = SocketIO(app, cors_allowed_origins="http://localhost:3000")
 
@@ -30,6 +34,10 @@ STOP_EXTRACTION_FLAG = False
 REVERSE_FRAME = False
 FORWARD_FRAME = False
 CURRENT_FRAME_INDEX = 0
+
+FRAME_HEIGHT,  FRAME_WIDTH = 0,0
+CURRENT_FRAME = None
+CURRENT_LABELS = []
  #pylint: disable=global-statement
 
 def allowed_file(filename):
@@ -155,6 +163,93 @@ def start_session():
     return jsonify({"ACK": False, "error": "No video file received."})
 
 
+@app.route('/feedback', methods=['POST'])
+@cross_origin()
+def get_feedback():
+    """
+    This function is responsible for receiving the feedback
+    and saving those feedbacks in appropriate format in the server
+    """
+    data = request.json
+    boxes = data.get('boxes')
+    count = int()
+    count_file = os.path.join(app.config['FEEDBACK_FOLDER'], 'count_frames.txt')
+    global CURRENT_FRAME
+
+    if not os.path.exists(app.config['FEEDBACK_FOLDER']):
+        os.makedirs(app.config['FEEDBACK_FOLDER'])
+        os.makedirs(os.path.join(app.config['FEEDBACK_FOLDER'], 'images'))
+        os.makedirs(os.path.join(app.config['FEEDBACK_FOLDER'], 'labels'))
+       
+
+        with open(count_file, 'w') as file:
+            count += 1
+            file.write(str(count))
+            file.close()
+
+    else:
+        with open(count_file, 'r') as file:
+            count = int(file.read())
+            file.close()
+
+    count += 1
+    
+    rgb_image = Image.fromarray(CURRENT_FRAME)
+    footage_name = os.path.join(app.config['FEEDBACK_FOLDER'], 'images', f"{count}.jpg")
+    rgb_image.save(footage_name)
+
+    with open(count_file, 'w') as file:
+        file.write(str(count))
+        file.close()
+
+    #Time for the labels of pictures
+
+    
+    for box in CURRENT_LABELS:
+            box = box.tolist()
+            for i in range(len(box)):
+                center_x = round((box[i][0] + ((box[i][2] - box[i][0]) / 2)) / FRAME_WIDTH, 6) 
+                center_y = round((box[i][1] + ((box[i][3] - box[i][1]) / 2)) / FRAME_HEIGHT, 6)
+                center_width = round((box[i][2] - box[i][0]) / FRAME_WIDTH, 6)
+                center_height =  round((box[i][3] - box[i][1]) / FRAME_HEIGHT, 6)
+                label = int(box[i][5])
+
+                labelling_data = f"{label} {center_x} {center_y} {center_width} {center_height}"
+                
+                label_filepath = os.path.join(app.config['FEEDBACK_FOLDER'], 'labels', f"{count}.txt")
+
+                with open(label_filepath, 'a+') as file:
+                    file.write(labelling_data + '\n')
+
+
+
+    for i, box in enumerate(boxes):
+
+        adjustment_factor = 960 - ((FRAME_WIDTH * 502 / FRAME_HEIGHT) / 2) - 200 #Don't know why this 200px
+        center_x = round((box['x'] -adjustment_factor + (box['width'] / 2)) / (FRAME_WIDTH * 502 / FRAME_HEIGHT), 6)
+        center_y = round((box['y'] + (box['height'] / 2)) / 502, 6)
+        center_width = round((box['width']) / (FRAME_WIDTH * 502 / FRAME_HEIGHT), 6)
+        center_height = round((box['height']) / 502, 6)
+        
+        label = int()
+        if box['label'] == "Adenomatous":
+            label = 2
+        else:
+            label = 0
+
+        labelling_data = f"{label} {center_x} {center_y} {center_width} {center_height}"
+
+        label_filepath = os.path.join(app.config['FEEDBACK_FOLDER'], 'labels', f"{count}.txt")
+
+        with open(label_filepath, 'a+') as file:
+            file.write(labelling_data + '\n')
+
+    return jsonify({'message':'successful'})
+
+    # return jsonify({'message':'Feedback Success!'})
+
+
+
 def extract_frames_from_video(video_path):
     """
     The below three lines are used to decode the base64 
@@ -165,9 +260,18 @@ def extract_frames_from_video(video_path):
     cap = cv2.VideoCapture(video_path)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    global CURRENT_FRAME_INDEX
+    global CURRENT_FRAME_INDEX, FRAME_HEIGHT, FRAME_WIDTH
 
     CURRENT_FRAME_INDEX = 0
+    FRAME_WIDTH = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))  # Use CAP_PROP_FRAME_WIDTH to get the frame width
+    FRAME_HEIGHT = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    size_message = {
+       "width":FRAME_WIDTH,
+        "height":FRAME_HEIGHT
+    }
+
+    socketio.emit('size', size_message)
 
     def convert_to_base64(img):
             """
@@ -188,16 +292,21 @@ def extract_frames_from_video(video_path):
         emiting of the frames to frontend service
         """
         ret, frame = cap.read()
-        global REVERSE_FRAME, FORWARD_FRAME
+        global REVERSE_FRAME, FORWARD_FRAME, CURRENT_FRAME, CURRENT_LABELS
+
 
         if not ret:
                 return
         
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        CURRENT_FRAME = rgb_frame.copy()
         # pylint: enable=no-member
         results = model(rgb_frame)
         results.render()# updates results.imgs with boxes and labels
+        CURRENT_LABELS = results.pred
+
         # Process images in parallel
+
 
         for img in results.ims:
             base64_string = convert_to_base64(img)
