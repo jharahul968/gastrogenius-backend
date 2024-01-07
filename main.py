@@ -4,7 +4,7 @@ import io
 import os
 import base64
 import numpy as np
-import torch
+import time
 from threading import Thread
 from PIL import Image
 from flask import Flask,jsonify,request,abort
@@ -13,6 +13,7 @@ from flask_cors import CORS, cross_origin
 from werkzeug.utils import secure_filename
 from flask_socketio import SocketIO
 from segmentation import get_yolov5
+
 
 model = get_yolov5()
 
@@ -138,6 +139,8 @@ def extract_frames():
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
 
+       
+
         return jsonify({'ack': True, 'filepath': filepath})
 
     return jsonify({'error': 'Invalid file format'})
@@ -150,15 +153,29 @@ def start_session():
     This function will start a thread for extracting and processing the frame
     and return an acknowlegement from main thread.
     """
-    global STOP_EXTRACTION_FLAG, PROCESS_THREAD
+    global STOP_EXTRACTION_FLAG, PROCESS_THREAD, FRAME_WIDTH, FRAME_HEIGHT
     STOP_EXTRACTION_FLAG = False
     
     video_path = request.data.decode('utf-8')
 
+    
+
     if video_path:
+
+        cap = cv2.VideoCapture(video_path)
+
+        FRAME_WIDTH = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))  # Use CAP_PROP_FRAME_WIDTH to get the frame width
+        FRAME_HEIGHT = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        size_message = {
+        "width":FRAME_WIDTH,
+            "height":FRAME_HEIGHT
+        }
+
         PROCESS_THREAD = Thread(target=extract_frames_from_video,args=(video_path,))
         PROCESS_THREAD.start()
-        return jsonify({"ACK": True})
+
+        return jsonify({"ACK": True, "size":size_message})
     
     return jsonify({"ACK": False, "error": "No video file received."})
 
@@ -192,15 +209,16 @@ def get_feedback():
             count = int(file.read())
             file.close()
 
-    count += 1
+        count += 1
+
+        with open(count_file, 'w') as file:
+            file.write(str(count))
+            file.close()
     
     rgb_image = Image.fromarray(CURRENT_FRAME)
     footage_name = os.path.join(app.config['FEEDBACK_FOLDER'], 'images', f"{count}.jpg")
     rgb_image.save(footage_name)
 
-    with open(count_file, 'w') as file:
-        file.write(str(count))
-        file.close()
 
     #Time for the labels of pictures
 
@@ -225,9 +243,9 @@ def get_feedback():
 
     for i, box in enumerate(boxes):
 
-        adjustment_factor = 960 - ((FRAME_WIDTH * 502 / FRAME_HEIGHT) / 2) - 200 #Don't know why this 200px
-        center_x = round((box['x'] -adjustment_factor + (box['width'] / 2)) / (FRAME_WIDTH * 502 / FRAME_HEIGHT), 6)
-        center_y = round((box['y'] + (box['height'] / 2)) / 502, 6)
+        adjustment_factor = 1470 - ((FRAME_WIDTH * 502 / FRAME_HEIGHT)) #Don't know why this 200px
+        center_x = round((box['x'] - adjustment_factor + (box['width'] / 2)) / (FRAME_WIDTH * 502 / FRAME_HEIGHT), 6)
+        center_y = round((box['y'] - 80 + (box['height'] / 2)) / 502, 6)
         center_width = round((box['width']) / (FRAME_WIDTH * 502 / FRAME_HEIGHT), 6)
         center_height = round((box['height']) / 502, 6)
         
@@ -260,18 +278,9 @@ def extract_frames_from_video(video_path):
     cap = cv2.VideoCapture(video_path)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    global CURRENT_FRAME_INDEX, FRAME_HEIGHT, FRAME_WIDTH
+    global CURRENT_FRAME_INDEX
 
     CURRENT_FRAME_INDEX = 0
-    FRAME_WIDTH = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))  # Use CAP_PROP_FRAME_WIDTH to get the frame width
-    FRAME_HEIGHT = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-    size_message = {
-       "width":FRAME_WIDTH,
-        "height":FRAME_HEIGHT
-    }
-
-    socketio.emit('size', size_message)
 
     def convert_to_base64(img):
             """
@@ -291,6 +300,7 @@ def extract_frames_from_video(video_path):
         This sub function handles the rendering and 
         emiting of the frames to frontend service
         """
+
         ret, frame = cap.read()
         global REVERSE_FRAME, FORWARD_FRAME, CURRENT_FRAME, CURRENT_LABELS
 
@@ -304,7 +314,6 @@ def extract_frames_from_video(video_path):
         results = model(rgb_frame)
         results.render()# updates results.imgs with boxes and labels
         CURRENT_LABELS = results.pred
-
         # Process images in parallel
 
 
@@ -317,11 +326,16 @@ def extract_frames_from_video(video_path):
             REVERSE_FRAME = False
         if FORWARD_FRAME:
             FORWARD_FRAME = False
+            
+        return
+
+        
         
    
     # pylint: enable=no-member
     while True:
-
+        
+        print("Starting to send at: ", time.time())
         if STOP_EXTRACTION_FLAG:
             break
         
@@ -344,10 +358,13 @@ def extract_frames_from_video(video_path):
             else:
                 continue
         
+        #print("Start: ", time.time())
         cap.set(cv2.CAP_PROP_POS_FRAMES, CURRENT_FRAME_INDEX)
         CURRENT_FRAME_INDEX += 1
+        #print("End: ",time.time())
         render(cap)
    
+    os.remove(video_path)
     cap.release()
 
 
