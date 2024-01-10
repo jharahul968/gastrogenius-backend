@@ -153,6 +153,9 @@ def get_feedback():
     """
     data = request.json
     boxes = data.get('boxes')
+    size = data.get('size')
+    windowSize = data.get('windowSize')
+
     count = int()
     count_file = os.path.join(app.config['FEEDBACK_FOLDER'], 'count_frames.txt')
     global CURRENT_FRAME
@@ -207,11 +210,12 @@ def get_feedback():
 
     for i, box in enumerate(boxes):
 
-        adjustment_factor = 1470 - ((FRAME_WIDTH * 502 / FRAME_HEIGHT)) #Don't know why this 200px
-        center_x = round((box['x'] - adjustment_factor + (box['width'] / 2)) / (FRAME_WIDTH * 502 / FRAME_HEIGHT), 6)
-        center_y = round((box['y'] - 80 + (box['height'] / 2)) / 502, 6)
-        center_width = round((box['width']) / (FRAME_WIDTH * 502 / FRAME_HEIGHT), 6)
-        center_height = round((box['height']) / 502, 6)
+        adjustment_factor_x = windowSize['width'] - size['width'] - 50
+        adjustment_factor_y = (windowSize['height'] - size['height']) / 2 
+        center_x = round((box['x'] - adjustment_factor_x + (box['width'] / 2)) / size['width'], 6)
+        center_y = round((box['y'] - adjustment_factor_y + (box['height'] / 2 )) / size['height'], 6)
+        center_width = round((box['width']) / size['width'], 6)
+        center_height = round((box['height']) / size['height'], 6)
         
         label = int()
         if box['label'] == "Adenomatous":
