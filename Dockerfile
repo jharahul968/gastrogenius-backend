@@ -1,15 +1,8 @@
-FROM tiangolo/uvicorn-gunicorn:python3.9-slim
-
-LABEL maintainer="jharahul968"
-
-ENV WORKERS_PER_CORE=4
-ENV MAX_WORKERS=24
-ENV LOG_LEVEL="warning"
-ENV TIMEOUT="200"
-
+FROM python:3.10-slim-bookworm
 # Install system dependencies
 RUN apt-get update \
     && apt-get install -y libgl1 libglib2.0-0 \
+    && apt-get install gcc -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -19,7 +12,9 @@ WORKDIR /yolov5-model
 
 # Copy and install Python dependencies
 COPY requirements.txt /yolov5-model
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install numpy \
+    && pip install Cython \
+    && pip install --no-cache-dir -r requirements.txt
 
 # Copy the application code
 COPY . /yolov5-model

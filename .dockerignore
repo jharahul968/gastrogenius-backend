@@ -8,3 +8,4 @@ uploads
 Dockerfile
 **/*.md
 /venv
+/uploads

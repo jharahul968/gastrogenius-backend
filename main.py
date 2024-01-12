@@ -3,8 +3,6 @@
 import io
 import os
 import base64
-import numpy as np
-import time
 from threading import Thread
 from PIL import Image
 from flask import Flask,jsonify,request,abort
@@ -26,7 +24,7 @@ ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mkv'}
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['FEEDBACK_FOLDER'] = FEEDBACK_FOLDER
 app.config['SECRET_KEY'] = 'secret!'
-socketio = SocketIO(app, cors_allowed_origins="http://localhost:3000")
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 PROCESS_THREAD = None
 PAUSE_EXTRACTING_FLAG = False
@@ -140,9 +138,9 @@ def extract_frames():
         file.save(filepath)
 
        
-        return jsonify({'ack': True, 'filepath': filepath})
+        return jsonify({'ack': True, 'filepath': filepath}), 200
 
-    return jsonify({'error': 'Invalid file format'}), 404
+    return jsonify({'ack':False, 'error': 'Invalid file format'}), 404
 
 @app.route('/feedback', methods=['POST'])
 @cross_origin()
@@ -280,15 +278,6 @@ def extract_frames_from_video(video_path):
     global CURRENT_FRAME_INDEX, FRAME_HEIGHT, FRAME_WIDTH
 
     CURRENT_FRAME_INDEX = 0
-    # FRAME_WIDTH = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))  # Use CAP_PROP_FRAME_WIDTH to get the frame width
-    # FRAME_HEIGHT = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-    # size_message = {
-    #    "width":FRAME_WIDTH,
-    #     "height":FRAME_HEIGHT
-    # }
-
-    # socketio.emit('size', size_message)
 
     def convert_to_base64(img):
             """
@@ -323,7 +312,6 @@ def extract_frames_from_video(video_path):
         CURRENT_LABELS = results.pred
 
         # Process images in parallel
-
 
         for img in results.ims:
             base64_string = convert_to_base64(img)
@@ -372,7 +360,7 @@ def extract_frames_from_video(video_path):
 if __name__ == '__main__':
     if not os.path.exists(app.config['UPLOAD_FOLDER']):
         os.makedirs(app.config['UPLOAD_FOLDER'])
-
+        
     socketio.run(app,
                  host='0.0.0.0', port = 8000,
                  allow_unsafe_werkzeug=True, debug=True)

@@ -1,8 +1,7 @@
 import torch
 from PIL import Image
 import io
-from torchvision import transforms
-from ultralytics import YOLO
+
 
 def get_yolov5():
     model = torch.hub.load('./yolov5', 'custom',
