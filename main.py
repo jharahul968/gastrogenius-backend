@@ -5,16 +5,21 @@ import os
 import base64
 from threading import Thread
 from PIL import Image
-from flask import Flask,jsonify,request,abort
+from flask import Flask,jsonify,request, session
 import cv2
 from flask_cors import CORS, cross_origin
 from werkzeug.utils import secure_filename
-from flask_socketio import SocketIO
+from flask_socketio import SocketIO, join_room, leave_room, send
 from segmentation import get_yolov5
+import random
 
 model = get_yolov5()
 
+# app = Flask(__name__, static_folder='./build', static_url_path='/')
+
+clients = {}
 app = Flask(__name__)
+app.secret_key = '9864456450'
 cors = CORS(app)
 
 UPLOAD_FOLDER = 'uploads'
@@ -45,6 +50,28 @@ def allowed_file(filename):
     """
     return '.' in filename and \
         filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+# @socketio.on('connection')
+# def create_new_socket(name):
+#     #room = data['name']
+#     clients[room] = {'thread': None, 'video_path': None}
+
+
+# @socketio.on('join')
+# def handle_join(data):
+#     global room
+    
+#     room = data['name']
+#     join_room(room)
+#     print(f"User joined the room {room}")
+
+
+# @socketio.on('leave')
+# def handle_leave():
+#     if room:
+#         leave_room(room)
+#     print(f"User left the room {room}")
 
 
 @socketio.on("Reverse")
@@ -129,6 +156,10 @@ def extract_frames():
 
     file = request.files['file']
 
+    global FRAME_WIDTH, FRAME_HEIGHT, STOP_EXTRACTION_FLAG
+
+    STOP_EXTRACTION_FLAG = False
+
     if file.filename == '':
         return jsonify({'error': 'No selected file'})
 
@@ -137,10 +168,20 @@ def extract_frames():
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
 
-       
-        return jsonify({'ack': True, 'filepath': filepath}), 200
+        cap = cv2.VideoCapture(filepath)
+
+        FRAME_WIDTH = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))  # Use CAP_PROP_FRAME_WIDTH to get the frame width
+        FRAME_HEIGHT = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        size_message = {
+        "width":FRAME_WIDTH,
+            "height":FRAME_HEIGHT
+        }
+ 
+        return jsonify({"ack": True, "filepath": filepath, "size":size_message}), 200
 
     return jsonify({'ack':False, 'error': 'Invalid file format'}), 404
+
 
 @app.route('/feedback', methods=['POST'])
 @cross_origin()
@@ -183,9 +224,6 @@ def get_feedback():
     rgb_image = Image.fromarray(CURRENT_FRAME)
     footage_name = os.path.join(app.config['FEEDBACK_FOLDER'], 'images', f"{count}.jpg")
     rgb_image.save(footage_name)
-
-
-    #Time for the labels of pictures
 
     
     for box in CURRENT_LABELS:
@@ -230,42 +268,9 @@ def get_feedback():
 
     return jsonify({'message':'successful'})
 
-
-@app.route('/start-session', methods=["POST"])
+@socketio.on('start-session')
 @cross_origin()
-def start_session():
-    """
-    This function will start a thread for extracting and processing the frame
-    and return an acknowlegement from main thread.
-    """
-    global FRAME_WIDTH, FRAME_HEIGHT, STOP_EXTRACTION_FLAG
-
-    STOP_EXTRACTION_FLAG = False
-    
-    video_path = request.data.decode('utf-8')
-
-
-    if video_path:
-
-        cap = cv2.VideoCapture(video_path)
-
-        FRAME_WIDTH = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))  # Use CAP_PROP_FRAME_WIDTH to get the frame width
-        FRAME_HEIGHT = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        
-        size_message = {
-        "width":FRAME_WIDTH,
-            "height":FRAME_HEIGHT
-        }
- 
-
-        FRAME_PROCESSING_THREAD = Thread(target=extract_frames_from_video, args=(video_path,))
-        FRAME_PROCESSING_THREAD.start()
-
-        return jsonify({"ACK": True, "size":size_message})
-    
-    return jsonify({"ACK": False, "error": "No video file received."})
-
-def extract_frames_from_video(video_path):
+def extract_frames_and_emit(video_path):
     """
     The below three lines are used to decode the base64 
     encoded frame back to numpy array format which is neccesary
@@ -279,6 +284,7 @@ def extract_frames_from_video(video_path):
 
     CURRENT_FRAME_INDEX = 0
 
+    
     def convert_to_base64(img):
             """
             This sub function converts rgb image data
@@ -308,10 +314,8 @@ def extract_frames_from_video(video_path):
         CURRENT_FRAME = rgb_frame.copy()
         # pylint: enable=no-member
         results = model(rgb_frame)
-        results.render()# updates results.imgs with boxes and labels
+        results.render()
         CURRENT_LABELS = results.pred
-
-        # Process images in parallel
 
         for img in results.ims:
             base64_string = convert_to_base64(img)
@@ -323,7 +327,6 @@ def extract_frames_from_video(video_path):
         if FORWARD_FRAME:
             FORWARD_FRAME = False
         
-   
     # pylint: enable=no-member
     while True:
 
@@ -356,6 +359,25 @@ def extract_frames_from_video(video_path):
     os.remove(video_path)
     cap.release()
 
+    return jsonify({"success":True}), 200
+
+
+# @socketio.on('start-session')
+# def start_session(data):
+#     room = data['name']
+#     if clients[room]['thread'] is None or not clients[room]['thread'].is_alive():
+#         clients[room]['video_path'] = data['video_path']
+#         clients[room]['thread'] = Thread(
+#             target=extract_frames_and_emit, args=(socketio, clients[room]['video_path'], room)
+#         )
+#         clients[room]['thread'].start()
+
+
+# @app.route('/')
+# @app.route('/register-service')
+# @app.route('/session')
+# def index():
+#     return app.send_static_file('index.html')
 
 if __name__ == '__main__':
     if not os.path.exists(app.config['UPLOAD_FOLDER']):
@@ -363,4 +385,4 @@ if __name__ == '__main__':
         
     socketio.run(app,
                  host='0.0.0.0', port = 8000,
-                 allow_unsafe_werkzeug=True, debug=True)
+                 allow_unsafe_werkzeug=True)
