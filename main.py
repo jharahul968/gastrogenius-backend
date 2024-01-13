@@ -3,7 +3,7 @@
 import io
 import os
 import base64
-from threading import Thread
+from threading import Thread, Lock
 from PIL import Image
 from flask import Flask,jsonify,request, session
 import cv2
@@ -11,15 +11,16 @@ from flask_cors import CORS, cross_origin
 from werkzeug.utils import secure_filename
 from flask_socketio import SocketIO, join_room, leave_room, send
 from segmentation import get_yolov5
+from concurrent.futures import ThreadPoolExecutor
 import random
 
 model = get_yolov5()
 
 # app = Flask(__name__, static_folder='./build', static_url_path='/')
 
-clients = {}
+thread_pool = ThreadPoolExecutor(max_workers=10) 
 app = Flask(__name__)
-app.secret_key = '9864456450'
+app.secret_key = '__your_secret_key_-'
 cors = CORS(app)
 
 UPLOAD_FOLDER = 'uploads'
@@ -31,18 +32,8 @@ app.config['FEEDBACK_FOLDER'] = FEEDBACK_FOLDER
 app.config['SECRET_KEY'] = 'secret!'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-PROCESS_THREAD = None
-PAUSE_EXTRACTING_FLAG = False
-STOP_EXTRACTION_FLAG = False
-REVERSE_FRAME = False
-FORWARD_FRAME = False
-CURRENT_FRAME_INDEX = 0
-
-FRAME_HEIGHT,  FRAME_WIDTH = 0,0
-CURRENT_FRAME = None
+users ={}
 CURRENT_LABELS = []
-
- #pylint: disable=global-statement
 
 def allowed_file(filename):
     """
@@ -52,96 +43,177 @@ def allowed_file(filename):
         filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-# @socketio.on('connection')
-# def create_new_socket(name):
-#     #room = data['name']
-#     clients[room] = {'thread': None, 'video_path': None}
+class UserSession:
+    def __init__(self, room, video_path):
+        self.room = room
+        self.video_path = video_path
+        self.stop_extraction_flag = False
+        self.pause_extracting_flag = False
+        self.reverse_frame = False
+        self.forward_frame = False
+        self.current_frame_index = 0
+        self.frame_height = 0
+        self.frame_width = 0
+        self.current_frame = None
+        self.current_labels = []
+        self.lock = Lock()
+        self.thread = None
 
+    def stop_thread(self):
+        with self.lock:
+            self.stop_extraction_flag = True
 
-# @socketio.on('join')
-# def handle_join(data):
-#     global room
-    
-#     room = data['name']
-#     join_room(room)
-#     print(f"User joined the room {room}")
+    def reverse(self):
+        with self.lock:
+            self.reverse_frame = True
+            self.forward_frame = False
+            self.pause_extracting_flag = True
 
+    def forward(self):
+        with self.lock:
+            self.reverse_frame = False
+            self.forward_frame = True
+            self.pause_extracting_flag = True
 
-# @socketio.on('leave')
-# def handle_leave():
-#     if room:
-#         leave_room(room)
-#     print(f"User left the room {room}")
+    def pause(self):
+        with self.lock:
+            self.pause_extracting_flag = True
 
+    def unpause(self):
+        with self.lock:
+            self.pause_extracting_flag = False
+
+    def stop(self):
+        with self.lock:
+            self.stop_extraction_flag = True
+            self.reverse_frame = False
+            self.forward_frame = False
+            self.pause_extracting_flag = False
+
+    def convert_to_base64(self, img):
+        img_base64 = Image.fromarray(img)
+        image_bytes = io.BytesIO()
+        img_base64.save(image_bytes, format="jpeg")
+        base64_string = base64.b64encode(image_bytes.getvalue()).decode("utf-8")
+        return base64_string
+
+    def render(self, cap):
+        ret, frame = cap.read()
+        if not ret:
+            return
+
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        self.current_frame = rgb_frame.copy()
+        results = model(rgb_frame)
+        results.render()
+        self.current_labels = results.pred
+
+        for img in results.ims:
+            base64_string = self.convert_to_base64(img)
+            socketio.emit("Processed_Frame", base64_string, room=self.room)
+
+        if self.reverse_frame:
+            self.reverse_frame = False
+
+        if self.forward_frame:
+            self.forward_frame = False
+
+    def extract_frames_and_emit(self):
+        cap = cv2.VideoCapture(self.video_path)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        while True:
+            if self.stop_extraction_flag:
+                break
+
+            if self.pause_extracting_flag:
+                if self.reverse_frame:
+                    self.current_frame_index = max(0, self.current_frame_index - 1)
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_index)
+                    self.render(cap)
+                    continue
+                elif self.forward_frame:
+                    self.current_frame_index = min(total_frames - 1, self.current_frame_index + 1)
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_index)
+                    self.render(cap)
+                    continue
+                else:
+                    continue
+
+            self.current_frame_index += 1
+            self.render(cap)
+        
+        os.remove(self.video_path)
+        cap.release()
+
+    def start_extraction_thread(self):
+        self.extract_frames_and_emit()
 
 @socketio.on("Reverse")
-@cross_origin()
-def reverse_frame():
-    global REVERSE_FRAME, FORWARD_FRAME, PAUSE_EXTRACTING_FLAG
-    
-    REVERSE_FRAME = True
-    FORWARD_FRAME = False
-    PAUSE_EXTRACTING_FLAG = True
-    
-    return jsonify({"message":"Reversed"})
-
+def reverse_frame(name):
+    room = name
+    if users.get(room):
+        users[room].reverse()
+    return "Success"
 
 @socketio.on("Forward")
-@cross_origin()
-def reverse_frame():
-    global FORWARD_FRAME, REVERSE_FRAME, PAUSE_EXTRACTING_FLAG
-    
-    REVERSE_FRAME = False
-    FORWARD_FRAME = True
-    PAUSE_EXTRACTING_FLAG = True
-
-    return jsonify({"message":"Forwarded"})
-
+def forward_frame(name):
+    room = name
+    if users.get(room):
+        users[room].forward()
+    return "Success"
 
 @socketio.on("Pause")
-@cross_origin()
-def pause_session():
+def pause_session(name):
     """
     This function pauses the real time session
     """
-    global PAUSE_EXTRACTING_FLAG
-    PAUSE_EXTRACTING_FLAG = True
 
-    return jsonify({"message":"Paused"})
-
+    print(name)
+    room = name
+    if users.get(room):
+        users[room].pause()
+    return "Success"
 
 @socketio.on("Unpause")
-@cross_origin()
-def unpause_session():
+def pause_session(name):
     """
-    This function unpauses the real time session
+    This function pauses the real time session
     """
-    global PAUSE_EXTRACTING_FLAG, REVERSE_FRAME, FORWARD_FRAME
-
-    PAUSE_EXTRACTING_FLAG = False
-    REVERSE_FRAME = False
-    FORWARD_FRAME = False
-
-    return jsonify({"message":"Unpaused"})
+    room = name
+    if users.get(room):
+        users[room].unpause()
+    return "Success"
 
 
 @socketio.on("stop_thread")
-@cross_origin()
-def stop_thread():
+def stop_thread(name):
     """
     This will stop the current running thread by setting the flag to True
     """
-    #pylint: disable=no-member
-    global STOP_EXTRACTION_FLAG, PAUSE_EXTRACTING_FLAG, REVERSE_FRAME, FORWARD_FRAME
-    #pylint: enable=no-member
+    room = name
+    if users.get(room):
+        users[room].stop()
 
-    PAUSE_EXTRACTING_FLAG = False
-    REVERSE_FRAME = False
-    FORWARD_FRAME = False
-    STOP_EXTRACTION_FLAG = True
+    return "Success"
 
-    return jsonify({'message':'Thread Stopped.'})
+@socketio.on('join')
+def create_new_socket(name):
+    room = name
+    join_room(room)
+    users[room] = UserSession(room, None)
+    print(f"User {room} connected.")
+    return "Success"
 
+@socketio.on('start-session')
+def start_session(data):
+    room = data['name']
+    video_path = data['video_path']
+    
+    if users.get(room):
+        users[room].video_path = video_path
+        users[room].start_extraction_thread()
+    return "Success"
 
 @app.route('/send-videos', methods=["POST"])
 @cross_origin()
@@ -184,7 +256,6 @@ def extract_frames():
 
 
 @app.route('/feedback', methods=['POST'])
-@cross_origin()
 def get_feedback():
     """
     This function is responsible for receiving the feedback
@@ -267,111 +338,6 @@ def get_feedback():
             file.write(labelling_data + '\n')
 
     return jsonify({'message':'successful'})
-
-@socketio.on('start-session')
-@cross_origin()
-def extract_frames_and_emit(video_path):
-    """
-    The below three lines are used to decode the base64 
-    encoded frame back to numpy array format which is neccesary
-    for AI server to process
-    """
-    #pylint: disable=no-member
-    cap = cv2.VideoCapture(video_path)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-    global CURRENT_FRAME_INDEX, FRAME_HEIGHT, FRAME_WIDTH
-
-    CURRENT_FRAME_INDEX = 0
-
-    
-    def convert_to_base64(img):
-            """
-            This sub function converts rgb image data
-            into base64_string
-            """
-            img_base64 = Image.fromarray(img)
-            image_bytes = io.BytesIO()
-            img_base64.save(image_bytes, format="jpeg")
-            base64_string = base64.b64encode(
-                image_bytes.getvalue()).decode("utf-8")
-            
-            return base64_string
-    
-    def render(cap):
-        """
-        This sub function handles the rendering and 
-        emiting of the frames to frontend service
-        """
-        ret, frame = cap.read()
-        global REVERSE_FRAME, FORWARD_FRAME, CURRENT_FRAME, CURRENT_LABELS
-
-
-        if not ret:
-                return
-        
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        CURRENT_FRAME = rgb_frame.copy()
-        # pylint: enable=no-member
-        results = model(rgb_frame)
-        results.render()
-        CURRENT_LABELS = results.pred
-
-        for img in results.ims:
-            base64_string = convert_to_base64(img)
-
-        socketio.emit("Processed_Frame", base64_string)
-
-        if REVERSE_FRAME:
-            REVERSE_FRAME = False
-        if FORWARD_FRAME:
-            FORWARD_FRAME = False
-        
-    # pylint: enable=no-member
-    while True:
-
-       
-        if STOP_EXTRACTION_FLAG:
-            break
-        
-        if PAUSE_EXTRACTING_FLAG:
-            
-            if REVERSE_FRAME:
-                CURRENT_FRAME_INDEX = max(0, CURRENT_FRAME_INDEX - 1)
-                cap.set(cv2.CAP_PROP_POS_FRAMES, CURRENT_FRAME_INDEX)
-
-                render(cap)
-                continue
-
-            elif FORWARD_FRAME:
-                CURRENT_FRAME_INDEX = min(total_frames - 1, CURRENT_FRAME_INDEX + 1)
-                cap.set(cv2.CAP_PROP_POS_FRAMES, CURRENT_FRAME_INDEX)
-
-                render(cap)
-                continue
-
-            else:
-                continue
-
-        CURRENT_FRAME_INDEX += 1
-        render(cap)
-
-    os.remove(video_path)
-    cap.release()
-
-    return jsonify({"success":True}), 200
-
-
-# @socketio.on('start-session')
-# def start_session(data):
-#     room = data['name']
-#     if clients[room]['thread'] is None or not clients[room]['thread'].is_alive():
-#         clients[room]['video_path'] = data['video_path']
-#         clients[room]['thread'] = Thread(
-#             target=extract_frames_and_emit, args=(socketio, clients[room]['video_path'], room)
-#         )
-#         clients[room]['thread'].start()
-
 
 # @app.route('/')
 # @app.route('/register-service')
