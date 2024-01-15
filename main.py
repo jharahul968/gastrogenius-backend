@@ -109,6 +109,9 @@ def start_session(data):
 @socketio.on('clean')
 def clean_session(filename):
     os.remove(os.path.join(os.getcwd(), filename))
+    bash_code = """ sudo rm ./pictures/*"""
+    process = subprocess.Popen(['bash', '-c', bash_code], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output, error = process.communicate()
     return "Success"
 
 @app.route('/download-zip', methods=["POST"])
@@ -132,10 +135,6 @@ def download_zip():
                 zip_file.write(file_path, arcname=arcname)
 
     # Send the zip file to the user for download
-    
-    bash_code = """ sudo rm ./pictures/*"""
-    process = subprocess.Popen(['bash', '-c', bash_code], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    output, error = process.communicate()
     return send_file(zip_filepath, as_attachment=True)
 
 
