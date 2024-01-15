@@ -1,153 +1,26 @@
 """ This is the flask application which 
     runs the ai model for Polyps Detection"""
-import io
 import os
-import base64
-from threading import Thread, Lock
-from PIL import Image
-from flask import Flask,jsonify,request, session
 import cv2
-from flask_cors import CORS, cross_origin
+from PIL import Image
 from werkzeug.utils import secure_filename
-from flask_socketio import SocketIO, join_room, leave_room, send
-from segmentation import get_yolov5
-from concurrent.futures import ThreadPoolExecutor
-import random
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
+import zipfile
+import subprocess
+from flask_socketio import SocketIO, join_room, leave_room
+from ServerClass.server import Server
 
-model = get_yolov5()
-
-# app = Flask(__name__, static_folder='./build', static_url_path='/')
-
-thread_pool = ThreadPoolExecutor(max_workers=10) 
+users = {}
 app = Flask(__name__)
 app.secret_key = '__your_secret_key_-'
-cors = CORS(app)
-
-UPLOAD_FOLDER = 'uploads'
-FEEDBACK_FOLDER = 'feedback'
-ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mkv'}
-
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['FEEDBACK_FOLDER'] = FEEDBACK_FOLDER
+CORS(app, origins="*")
+app.config['UPLOAD_FOLDER'] = Server.UPLOAD_FOLDER
+app.config['FEEDBACK_FOLDER'] = Server.FEEDBACK_FOLDER
+app.config['FOOTAGE_FOLDER'] = Server.FOOTAGE_FOLDER
 app.config['SECRET_KEY'] = 'secret!'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-users ={}
-CURRENT_LABELS = []
-
-def allowed_file(filename):
-    """
-    This function defines the type of files allowed in the extraction
-    """
-    return '.' in filename and \
-        filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-
-class UserSession:
-    def __init__(self, room, video_path):
-        self.room = room
-        self.video_path = video_path
-        self.stop_extraction_flag = False
-        self.pause_extracting_flag = False
-        self.reverse_frame = False
-        self.forward_frame = False
-        self.current_frame_index = 0
-        self.frame_height = 0
-        self.frame_width = 0
-        self.current_frame = None
-        self.current_labels = []
-        self.lock = Lock()
-        self.thread = None
-
-    def stop_thread(self):
-        with self.lock:
-            self.stop_extraction_flag = True
-
-    def reverse(self):
-        with self.lock:
-            self.reverse_frame = True
-            self.forward_frame = False
-            self.pause_extracting_flag = True
-
-    def forward(self):
-        with self.lock:
-            self.reverse_frame = False
-            self.forward_frame = True
-            self.pause_extracting_flag = True
-
-    def pause(self):
-        with self.lock:
-            self.pause_extracting_flag = True
-
-    def unpause(self):
-        with self.lock:
-            self.pause_extracting_flag = False
-
-    def stop(self):
-        with self.lock:
-            self.stop_extraction_flag = True
-            self.reverse_frame = False
-            self.forward_frame = False
-            self.pause_extracting_flag = False
-
-    def convert_to_base64(self, img):
-        img_base64 = Image.fromarray(img)
-        image_bytes = io.BytesIO()
-        img_base64.save(image_bytes, format="jpeg")
-        base64_string = base64.b64encode(image_bytes.getvalue()).decode("utf-8")
-        return base64_string
-
-    def render(self, cap):
-        ret, frame = cap.read()
-        if not ret:
-            return
-
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        self.current_frame = rgb_frame.copy()
-        results = model(rgb_frame)
-        results.render()
-        self.current_labels = results.pred
-
-        for img in results.ims:
-            base64_string = self.convert_to_base64(img)
-            socketio.emit("Processed_Frame", base64_string, room=self.room)
-
-        if self.reverse_frame:
-            self.reverse_frame = False
-
-        if self.forward_frame:
-            self.forward_frame = False
-
-    def extract_frames_and_emit(self):
-        cap = cv2.VideoCapture(self.video_path)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-        while True:
-            if self.stop_extraction_flag:
-                break
-
-            if self.pause_extracting_flag:
-                if self.reverse_frame:
-                    self.current_frame_index = max(0, self.current_frame_index - 1)
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_index)
-                    self.render(cap)
-                    continue
-                elif self.forward_frame:
-                    self.current_frame_index = min(total_frames - 1, self.current_frame_index + 1)
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame_index)
-                    self.render(cap)
-                    continue
-                else:
-                    continue
-
-            self.current_frame_index += 1
-            self.render(cap)
-        
-        os.remove(self.video_path)
-        cap.release()
-
-    def start_extraction_thread(self):
-        self.extract_frames_and_emit()
 
 @socketio.on("Reverse")
 def reverse_frame(name):
@@ -156,6 +29,7 @@ def reverse_frame(name):
         users[room].reverse()
     return "Success"
 
+
 @socketio.on("Forward")
 def forward_frame(name):
     room = name
@@ -163,20 +37,20 @@ def forward_frame(name):
         users[room].forward()
     return "Success"
 
+
 @socketio.on("Pause")
 def pause_session(name):
     """
     This function pauses the real time session
     """
-
-    print(name)
     room = name
     if users.get(room):
         users[room].pause()
     return "Success"
 
+
 @socketio.on("Unpause")
-def pause_session(name):
+def unpause_session(name):
     """
     This function pauses the real time session
     """
@@ -189,34 +63,83 @@ def pause_session(name):
 @socketio.on("stop_thread")
 def stop_thread(name):
     """
-    This will stop the current running thread by setting the flag to True
+    This will stop the current running thread by 
+    setting the flag to True
     """
     room = name
     if users.get(room):
         users[room].stop()
-
     return "Success"
+
 
 @socketio.on('join')
 def create_new_socket(name):
     room = name
     join_room(room)
-    users[room] = UserSession(room, None)
-    print(f"User {room} connected.")
+    users[room] = Server(room, None, socketio)
+    return "Success"
+
+
+@socketio.on('leave')
+def leave(name):
+    """User will leave the room"""
+    room = name
+    if not users[room]:
+        return "Nope"
+    
+    leave_room(room)
+    del users[room]
     return "Success"
 
 @socketio.on('start-session')
 def start_session(data):
+
     room = data['name']
+    diagnosis = data['diagnosis']
+    is_save = data['save_value']
     video_path = data['video_path']
-    
     if users.get(room):
         users[room].video_path = video_path
+        users[room].diagnosis = diagnosis
+        users[room].save_picture = is_save
         users[room].start_extraction_thread()
+
     return "Success"
 
+@socketio.on('clean')
+def clean_session(filename):
+    os.remove(os.path.join(os.getcwd(), filename))
+    return "Success"
+
+@app.route('/download-zip', methods=["POST"])
+def download_zip():
+
+    data = request.json
+    room = data.get('name')
+    pictures_folder = os.path.join(os.getcwd(), app.config["FOOTAGE_FOLDER"])
+
+    # Create a temporary directory to store the zip file
+    temp_dir = os.getcwd()
+    zip_filename = f'{room}_{users[room].diagnosis}.zip'
+    zip_filepath = os.path.join(temp_dir, zip_filename)
+
+    # Create a zip file and add all images from the pictures folder
+    with zipfile.ZipFile(zip_filepath, 'w') as zip_file:
+        for root, dirs, files in os.walk(pictures_folder):
+            for file in files:
+                file_path = os.path.join(root, file)
+                arcname = os.path.relpath(file_path, pictures_folder)
+                zip_file.write(file_path, arcname=arcname)
+
+    # Send the zip file to the user for download
+    
+    bash_code = """ sudo rm ./pictures/*"""
+    process = subprocess.Popen(['bash', '-c', bash_code], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output, error = process.communicate()
+    return send_file(zip_filepath, as_attachment=True)
+
+
 @app.route('/send-videos', methods=["POST"])
-@cross_origin()
 def extract_frames():
     """
     This function handles the incoming video file from the
@@ -224,30 +147,29 @@ def extract_frames():
     an acknowledgement and the video path if the operation is successful.
     """
     if 'file' not in request.files:
-        return jsonify({'error': 'No file part'})
+        return jsonify({'error': 'No file part'}), 404
 
     file = request.files['file']
-
-    global FRAME_WIDTH, FRAME_HEIGHT, STOP_EXTRACTION_FLAG
-
-    STOP_EXTRACTION_FLAG = False
+    room = request.form['name']
+    users[room].stop_extraction_flag = False
 
     if file.filename == '':
-        return jsonify({'error': 'No selected file'})
+        return jsonify({'error': 'No selected file'}), 404
 
-    if file and allowed_file(file.filename):
+    if file and Server.allowed_file(file.filename):
         filename = secure_filename(file.filename)
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
 
+        #pylint: disable=no-member
         cap = cv2.VideoCapture(filepath)
+        users[room].frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) 
+        users[room].frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        #pylint: enable=no-member
 
-        FRAME_WIDTH = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))  # Use CAP_PROP_FRAME_WIDTH to get the frame width
-        FRAME_HEIGHT = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        
         size_message = {
-        "width":FRAME_WIDTH,
-            "height":FRAME_HEIGHT
+        "width":users[room].frame_width,
+            "height":users[room].frame_height
         }
  
         return jsonify({"ack": True, "filepath": filepath, "size":size_message}), 200
@@ -264,11 +186,11 @@ def get_feedback():
     data = request.json
     boxes = data.get('boxes')
     size = data.get('size')
+    room = data.get('name')
     windowSize = data.get('windowSize')
 
     count = int()
     count_file = os.path.join(app.config['FEEDBACK_FOLDER'], 'count_frames.txt')
-    global CURRENT_FRAME
 
     if not os.path.exists(app.config['FEEDBACK_FOLDER']):
         os.makedirs(app.config['FEEDBACK_FOLDER'])
@@ -292,26 +214,26 @@ def get_feedback():
             file.write(str(count))
             file.close()
     
-    rgb_image = Image.fromarray(CURRENT_FRAME)
+    rgb_image = Image.fromarray(users[room].current_frame)
     footage_name = os.path.join(app.config['FEEDBACK_FOLDER'], 'images', f"{count}.jpg")
     rgb_image.save(footage_name)
 
     
-    for box in CURRENT_LABELS:
-            box = box.tolist()
-            for i in range(len(box)):
-                center_x = round((box[i][0] + ((box[i][2] - box[i][0]) / 2)) / FRAME_WIDTH, 6) 
-                center_y = round((box[i][1] + ((box[i][3] - box[i][1]) / 2)) / FRAME_HEIGHT, 6)
-                center_width = round((box[i][2] - box[i][0]) / FRAME_WIDTH, 6)
-                center_height =  round((box[i][3] - box[i][1]) / FRAME_HEIGHT, 6)
-                label = int(box[i][5])
+    for box in users[room].current_labels:
+        box = box.tolist()
+        for i in range(len(box)):
+            center_x = round((box[i][0] + ((box[i][2] - box[i][0]) / 2)) / users[room].frame_height, 6) 
+            center_y = round((box[i][1] + ((box[i][3] - box[i][1]) / 2)) / users[room].frame_height, 6)
+            center_width = round((box[i][2] - box[i][0]) / users[room].frame_width, 6)
+            center_height =  round((box[i][3] - box[i][1]) / users[room].frame_height, 6)
+            label = int(box[i][5])
 
-                labelling_data = f"{label} {center_x} {center_y} {center_width} {center_height}"
-                
-                label_filepath = os.path.join(app.config['FEEDBACK_FOLDER'], 'labels', f"{count}.txt")
+            labelling_data = f"{label} {center_x} {center_y} {center_width} {center_height}"
+            
+            label_filepath = os.path.join(app.config['FEEDBACK_FOLDER'], 'labels', f"{count}.txt")
 
-                with open(label_filepath, 'a+') as file:
-                    file.write(labelling_data + '\n')
+            with open(label_filepath, 'a+') as file:
+                file.write(labelling_data + '\n')
 
 
 
@@ -339,16 +261,14 @@ def get_feedback():
 
     return jsonify({'message':'successful'})
 
-# @app.route('/')
-# @app.route('/register-service')
-# @app.route('/session')
-# def index():
-#     return app.send_static_file('index.html')
 
 if __name__ == '__main__':
     if not os.path.exists(app.config['UPLOAD_FOLDER']):
         os.makedirs(app.config['UPLOAD_FOLDER'])
-        
-    socketio.run(app,
+
+    if not os.path.exists(app.config['FOOTAGE_FOLDER']):
+        os.makedirs(app.config['FOOTAGE_FOLDER'])
+
+    socketio.run(app,debug=True,
                  host='0.0.0.0', port = 8000,
                  allow_unsafe_werkzeug=True)

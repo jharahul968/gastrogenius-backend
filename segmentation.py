@@ -5,7 +5,7 @@ import io
 
 def get_yolov5():
     model = torch.hub.load('./yolov5', 'custom',
-                           path='./model/best.pt', source='local',force_reload=True)
+                           path='./model/best.pt', source='local',force_reload=True, _verbose=False)
     model.conf = 0.5
     #model.cuda()
     return model
