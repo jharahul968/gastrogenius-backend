@@ -12,7 +12,7 @@ from flask_socketio import SocketIO, join_room, leave_room
 from ServerClass.server import Server
 
 users = {}
-app = Flask(__name__)
+app = Flask(__name__, static_folder = './build', static_url_path = '/')
 app.secret_key = '__your_secret_key_-'
 CORS(app, origins="*")
 app.config['UPLOAD_FOLDER'] = Server.UPLOAD_FOLDER
@@ -109,7 +109,7 @@ def start_session(data):
 @socketio.on('clean')
 def clean_session(filename):
     os.remove(os.path.join(os.getcwd(), filename))
-    bash_code = """ sudo rm ./pictures/*"""
+    bash_code = """rm ./pictures/*"""
     process = subprocess.Popen(['bash', '-c', bash_code], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     output, error = process.communicate()
     return "Success"
@@ -260,6 +260,12 @@ def get_feedback():
 
     return jsonify({'message':'successful'})
 
+
+@app.route('/')
+@app.route('/register-service')
+@app.route('/session')
+def index():
+    return app.send_static_file('index.html') 
 
 if __name__ == '__main__':
     if not os.path.exists(app.config['UPLOAD_FOLDER']):
