@@ -31,4 +31,6 @@ Flask-Cors
 FLask-SocketIO
 segmentation
 starlette
+pytest
+pytest-cov
 python-multipart

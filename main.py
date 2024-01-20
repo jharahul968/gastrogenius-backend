@@ -9,7 +9,7 @@ from flask_cors import CORS
 import zipfile
 import subprocess
 from flask_socketio import SocketIO, join_room, leave_room
-from ServerClass.server import Server
+from src.ServerClass.server import Server
 
 users = {}
 app = Flask(__name__, static_folder = './build', static_url_path = '/')
@@ -27,7 +27,7 @@ def reverse_frame(name):
     room = name
     if users.get(room):
         users[room].reverse()
-    return "Success"
+    socketio.emit('response', 'Success')
 
 
 @socketio.on("Forward")
@@ -35,7 +35,7 @@ def forward_frame(name):
     room = name
     if users.get(room):
         users[room].forward()
-    return "Success"
+    socketio.emit('response', 'Success')
 
 
 @socketio.on("Pause")
@@ -46,7 +46,7 @@ def pause_session(name):
     room = name
     if users.get(room):
         users[room].pause()
-    return "Success"
+    socketio.emit('response', 'Success')
 
 
 @socketio.on("Unpause")
@@ -57,8 +57,7 @@ def unpause_session(name):
     room = name
     if users.get(room):
         users[room].unpause()
-    return "Success"
-
+    socketio.emit('response', 'Success')
 
 @socketio.on("stop_thread")
 def stop_thread(name):
@@ -69,7 +68,7 @@ def stop_thread(name):
     room = name
     if users.get(room):
         users[room].stop()
-    return "Success"
+    socketio.emit('response', 'Success')
 
 
 @socketio.on('join')
@@ -77,19 +76,20 @@ def create_new_socket(name):
     room = name
     join_room(room)
     users[room] = Server(room, None, socketio)
-    return "Success"
+    socketio.emit('response', 'Success')
 
 
 @socketio.on('leave')
 def leave(name):
     """User will leave the room"""
     room = name
-    if not users[room]:
-        return "Nope"
+    if name not in users.keys():
+       socketio.emit('response', 'User not found')
+       return
     
     leave_room(room)
     del users[room]
-    return "Success"
+    socketio.emit('response', 'Success')
 
 @socketio.on('start-session')
 def start_session(data):
@@ -103,8 +103,8 @@ def start_session(data):
         users[room].diagnosis = diagnosis
         users[room].save_picture = is_save
         users[room].start_extraction_thread()
-
-    return "Success"
+ 
+    socketio.emit('response', 'Success')
 
 @socketio.on('clean')
 def clean_session(filename):
@@ -112,7 +112,7 @@ def clean_session(filename):
     bash_code = """rm ./pictures/*"""
     process = subprocess.Popen(['bash', '-c', bash_code], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     output, error = process.communicate()
-    return "Success"
+    socketio.emit('response', 'Success')
 
 @app.route('/download-zip', methods=["POST"])
 def download_zip():
@@ -135,7 +135,7 @@ def download_zip():
                 zip_file.write(file_path, arcname=arcname)
 
     # Send the zip file to the user for download
-    return send_file(zip_filepath, as_attachment=True)
+    return send_file(zip_filepath, as_attachment=True), 200
 
 
 @app.route('/send-videos', methods=["POST"])
@@ -266,6 +266,7 @@ def get_feedback():
 @app.route('/session')
 def index():
     return app.send_static_file('index.html') 
+
 
 if __name__ == '__main__':
     if not os.path.exists(app.config['UPLOAD_FOLDER']):
