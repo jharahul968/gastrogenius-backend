@@ -9,7 +9,7 @@ from flask_cors import CORS
 import zipfile
 import subprocess
 from flask_socketio import SocketIO, join_room, leave_room
-from src.ServerClass.server import Server
+from ServerClass.server import Server
 
 users = {}
 app = Flask(__name__, static_folder = './build', static_url_path = '/')
