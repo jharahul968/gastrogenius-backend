@@ -2,7 +2,7 @@ import io
 import os
 import base64
 from threading import Lock
-from src.segmentation import get_yolov5
+from segmentation import get_yolov5
 import cv2
 import random
 from PIL import Image
