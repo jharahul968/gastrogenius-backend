@@ -1,0 +1,7 @@
+__pycache__
+venv
+/uploads
+/feedback
+.pytest_cache
+.coverage
+.dockerignore
