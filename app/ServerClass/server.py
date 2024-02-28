@@ -17,6 +17,7 @@ class Server:
     UPLOAD_FOLDER = 'uploads'
     FEEDBACK_FOLDER = 'feedback'
     FOOTAGE_FOLDER = 'pictures'
+    COUNT_FILE = "count_frames.txt"
     MODEL = get_yolov5()
 
     def __init__(self, room, video_path, socketio):
