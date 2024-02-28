@@ -4,9 +4,12 @@ import base64
 from threading import Lock
 from segmentation import get_yolov5
 import cv2
+import json
 import random
 from PIL import Image
 import zipfile
+from multiprocessing import Process
+from threading import Thread
 
 class Server:
     
@@ -114,7 +117,7 @@ class Server:
         for img in results.ims:
             base64_string = self.convert_to_base64(img)
             self.socket.emit("Processed_Frame", base64_string, room=self.room)
-
+            
         if self.reverse_frame:
             self.reverse_frame = False
 
@@ -146,8 +149,10 @@ class Server:
 
             self.current_frame_index += 1
             self.render(cap)
-        
-        os.remove(self.video_path)
+            # break
+         
+        if os.path.exists(self.video_path):
+            os.remove(self.video_path)
         if self.save_picture:
             data = {
                 "name":self.room,
@@ -158,4 +163,6 @@ class Server:
 
 
     def start_extraction_thread(self):
-        self.extract_frames_and_emit()
+       process = Process(target= self.extract_frames_and_emit())
+       process.start()
+        #self.extract_frames_and_emit()

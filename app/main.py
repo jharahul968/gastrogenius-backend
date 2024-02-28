@@ -7,13 +7,17 @@ from werkzeug.utils import secure_filename
 from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
 import zipfile
+import json
 import subprocess
 from flask_socketio import SocketIO, join_room, leave_room
 from ServerClass.server import Server
+from redis import Redis
+import threading
 
 users = {}
 app = Flask(__name__, static_folder = '../build', static_url_path = '/')
-app.secret_key = '__your_secret_key_-'
+app.secret_key = '__your_secret_key__'
+
 CORS(app, origins="*")
 app.config['UPLOAD_FOLDER'] = Server.UPLOAD_FOLDER
 app.config['FEEDBACK_FOLDER'] = Server.FEEDBACK_FOLDER
@@ -109,7 +113,7 @@ def start_session(data):
 @socketio.on('clean')
 def clean_session(filename):
     os.remove(os.path.join(os.getcwd(), filename))
-    bash_code = """rm ../pictures/*"""
+    bash_code = """rm ./pictures/*"""
     process = subprocess.Popen(['bash', '-c', bash_code], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     output, error = process.communicate()
     socketio.emit('response', 'Success')
@@ -191,12 +195,11 @@ def get_feedback():
 
     count = int()
     count_file = os.path.join(app.config['FEEDBACK_FOLDER'], 'count_frames.txt')
-
     if not os.path.exists(app.config['FEEDBACK_FOLDER']):
         os.makedirs(app.config['FEEDBACK_FOLDER'])
         os.makedirs(os.path.join(app.config['FEEDBACK_FOLDER'], 'images'))
         os.makedirs(os.path.join(app.config['FEEDBACK_FOLDER'], 'labels'))
-       
+        
 
         with open(count_file, 'w') as file:
             count += 1
@@ -265,9 +268,9 @@ def get_feedback():
 @app.route('/')
 @app.route('/register-service')
 @app.route('/session')
+@app.route('/developers')
 def index():
     return app.send_static_file('index.html') 
-
 
 
 if __name__ == '__main__':
