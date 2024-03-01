@@ -1,5 +1,5 @@
 __pycache__
-venv
+/pyvenv
 /uploads
 /feedback
 .pytest_cache
