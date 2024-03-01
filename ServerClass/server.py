@@ -6,6 +6,7 @@ from segmentation import get_yolov5
 import cv2
 import random
 from PIL import Image
+from multiprocessing import Process
 import zipfile
 
 class Server:
@@ -158,4 +159,5 @@ class Server:
 
 
     def start_extraction_thread(self):
-        self.extract_frames_and_emit()
+        process = Process(target=self.extract_frames_and_emit())
+        process.start()
