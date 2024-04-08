@@ -1,0 +1,1 @@
+python3 train.py --epochs 2 --data feedback.yaml --weights ../model/best.pt

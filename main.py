@@ -2,14 +2,11 @@
     runs the ai model for Polyps Detection"""
 import os
 import cv2
-from PIL import Image
-from werkzeug.utils import secure_filename
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-import zipfile
-import subprocess
 from flask_socketio import SocketIO, join_room, leave_room
-from ServerClass.server import Server
+from Class.server import Server
+from Class.storage import Storage
 
 users = {}
 app = Flask(__name__, static_folder = './build', static_url_path = '/')
@@ -108,34 +105,37 @@ def start_session(data):
 
 @socketio.on('clean')
 def clean_session(filename):
-    os.remove(os.path.join(os.getcwd(), filename))
-    bash_code = """rm ./pictures/*"""
-    process = subprocess.Popen(['bash', '-c', bash_code], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    output, error = process.communicate()
+    Storage.clean_system(filename)
     socketio.emit('response', 'Success')
+
 
 @app.route('/download-zip', methods=["POST"])
 def download_zip():
-
+    """This function is responsible for downloading the zip file"""
     data = request.json
     room = data.get('name')
-    pictures_folder = os.path.join(os.getcwd(), app.config["FOOTAGE_FOLDER"])
-
-    # Create a temporary directory to store the zip file
-    temp_dir = os.getcwd()
-    zip_filename = f'{room}_{users[room].diagnosis}.zip'
-    zip_filepath = os.path.join(temp_dir, zip_filename)
-
-    # Create a zip file and add all images from the pictures folder
-    with zipfile.ZipFile(zip_filepath, 'w') as zip_file:
-        for root, dirs, files in os.walk(pictures_folder):
-            for file in files:
-                file_path = os.path.join(root, file)
-                arcname = os.path.relpath(file_path, pictures_folder)
-                zip_file.write(file_path, arcname=arcname)
-
-    # Send the zip file to the user for download
+    zip_filepath = Storage.download_zip(room, users[room], app.config["FOOTAGE_FOLDER"])
     return send_file(zip_filepath, as_attachment=True), 200
+
+
+@app.route('/feedback', methods=['POST'])
+def get_feedback():
+    """
+    This function is responsible for receiving the feedback
+    and saving those feedbacks in appropriate format in the server
+    """
+    data = request.json
+    room = data.get('name')
+
+    sizes = {
+        "height":users[room].frame_height,
+        "width":users[room].frame_width
+    }
+
+    Storage.feedback(data, sizes, app.config['FEEDBACK_FOLDER'], 
+                     users[room].current_frame, users[room].current_labels)
+
+    return jsonify({'message':'successful'})
 
 
 @app.route('/send-videos', methods=["POST"])
@@ -156,9 +156,7 @@ def extract_frames():
         return jsonify({'error': 'No selected file'}), 404
 
     if file and Server.allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(filepath)
+        filepath = Storage.save_file(app.config["UPLOAD_FOLDER"], file)
 
         #pylint: disable=no-member
         cap = cv2.VideoCapture(filepath)
@@ -174,91 +172,6 @@ def extract_frames():
         return jsonify({"ack": True, "filepath": filepath, "size":size_message}), 200
 
     return jsonify({'ack':False, 'error': 'Invalid file format'}), 404
-
-
-@app.route('/feedback', methods=['POST'])
-def get_feedback():
-    """
-    This function is responsible for receiving the feedback
-    and saving those feedbacks in appropriate format in the server
-    """
-    data = request.json
-    boxes = data.get('boxes')
-    size = data.get('size')
-    room = data.get('name')
-    windowSize = data.get('windowSize')
-
-    count = int()
-    count_file = os.path.join(app.config['FEEDBACK_FOLDER'], 'count_frames.txt')
-
-    if not os.path.exists(app.config['FEEDBACK_FOLDER']):
-        os.makedirs(app.config['FEEDBACK_FOLDER'])
-        os.makedirs(os.path.join(app.config['FEEDBACK_FOLDER'], 'images'))
-        os.makedirs(os.path.join(app.config['FEEDBACK_FOLDER'], 'labels'))
-       
-
-        with open(count_file, 'w') as file:
-            count += 1
-            file.write(str(count))
-            file.close()
-
-    else:
-        with open(count_file, 'r') as file:
-            count = int(file.read())
-            file.close()
-
-        count += 1
-
-        with open(count_file, 'w') as file:
-            file.write(str(count))
-            file.close()
-    
-    rgb_image = Image.fromarray(users[room].current_frame)
-    footage_name = os.path.join(app.config['FEEDBACK_FOLDER'], 'images', f"{count}.jpg")
-    rgb_image.save(footage_name)
-
-    
-    for box in users[room].current_labels:
-        box = box.tolist()
-        for i in range(len(box)):
-            center_x = round((box[i][0] + ((box[i][2] - box[i][0]) / 2)) / users[room].frame_height, 6) 
-            center_y = round((box[i][1] + ((box[i][3] - box[i][1]) / 2)) / users[room].frame_height, 6)
-            center_width = round((box[i][2] - box[i][0]) / users[room].frame_width, 6)
-            center_height =  round((box[i][3] - box[i][1]) / users[room].frame_height, 6)
-            label = int(box[i][5])
-
-            labelling_data = f"{label} {center_x} {center_y} {center_width} {center_height}"
-            
-            label_filepath = os.path.join(app.config['FEEDBACK_FOLDER'], 'labels', f"{count}.txt")
-
-            with open(label_filepath, 'a+') as file:
-                file.write(labelling_data + '\n')
-
-
-
-    for i, box in enumerate(boxes):
-
-        adjustment_factor_x = windowSize['width'] - size['width'] - 50
-        adjustment_factor_y = (windowSize['height'] - size['height']) / 2 
-        center_x = round((box['x'] - adjustment_factor_x + (box['width'] / 2)) / size['width'], 6)
-        center_y = round((box['y'] - adjustment_factor_y + (box['height'] / 2 )) / size['height'], 6)
-        center_width = round((box['width']) / size['width'], 6)
-        center_height = round((box['height']) / size['height'], 6)
-        
-        label = int()
-        if box['label'] == "Adenomatous":
-            label = 2
-        else:
-            label = 0
-
-        labelling_data = f"{label} {center_x} {center_y} {center_width} {center_height}"
-
-        label_filepath = os.path.join(app.config['FEEDBACK_FOLDER'], 'labels', f"{count}.txt")
-
-        with open(label_filepath, 'a+') as file:
-            file.write(labelling_data + '\n')
-
-    return jsonify({'message':'successful'})
 
 
 @app.route('/')

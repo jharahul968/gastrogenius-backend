@@ -108,7 +108,6 @@ def create_dataloader(path,
                       hyp=None,
                       augment=False,
                       cache=False,
-                      pad=0.0,
                       rect=False,
                       rank=-1,
                       workers=8,
@@ -116,7 +115,10 @@ def create_dataloader(path,
                       quad=False,
                       prefix='',
                       shuffle=False,
-                      seed=0):
+                      seed=0,
+                      pad=0.0,
+                      ):
+    
     if rect and shuffle:
         LOGGER.warning('WARNING ⚠️ --rect is incompatible with DataLoader shuffle, setting shuffle=False')
         shuffle = False
