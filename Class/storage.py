@@ -119,7 +119,7 @@ class Storage:
             with open(label_path, 'a+') as file:
                 file.write(labelling_data + '\n')
         
-        for _ in range(4):
+        for _ in range(9):
             count += 1
             replicated_footage = os.path.join(feedback_folder, 'images', f"{count}.jpg")
             replicated_label_path = os.path.join(feedback_folder, 'labels', f"{count}.txt")
